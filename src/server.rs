@@ -25,6 +25,7 @@ use actix_tls::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 use actix_tls::rustls::ServerConfig as RustlsServerConfig;
 
 use crate::config::AppConfig;
+use actix_rt::{ActixRtFactory, RuntimeFactory};
 
 struct Socket {
     scheme: &'static str,
@@ -55,7 +56,7 @@ struct Config {
 ///         .await
 /// }
 /// ```
-pub struct HttpServer<F, I, S, B>
+pub struct HttpServer<F, I, S, B, RT = ActixRtFactory>
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
@@ -69,7 +70,7 @@ where
     config: Arc<Mutex<Config>>,
     backlog: i32,
     sockets: Vec<Socket>,
-    builder: ServerBuilder,
+    builder: ServerBuilder<RT>,
     on_connect_fn: Option<Arc<dyn Fn(&dyn Any, &mut Extensions) + Send + Sync>>,
     _t: PhantomData<(S, B)>,
 }
@@ -87,6 +88,24 @@ where
 {
     /// Create new http server with application factory
     pub fn new(factory: F) -> Self {
+        Self::new_with(factory)
+    }
+}
+
+impl<F, I, S, B, RT> HttpServer<F, I, S, B, RT>
+where
+    F: Fn() -> I + Send + Clone + 'static,
+    I: IntoServiceFactory<S>,
+    S: ServiceFactory<Config = AppConfig, Request = Request>,
+    S::Error: Into<Error> + 'static,
+    S::InitError: fmt::Debug,
+    S::Response: Into<Response<B>> + 'static,
+    <S::Service as Service>::Future: 'static,
+    B: MessageBody + 'static,
+    RT: RuntimeFactory,
+{
+    /// Create new http server with application factory
+    pub fn new_with(factory: F) -> Self {
         HttpServer {
             factory,
             config: Arc::new(Mutex::new(Config {
@@ -97,7 +116,7 @@ where
             })),
             backlog: 1024,
             sockets: Vec::new(),
-            builder: ServerBuilder::default(),
+            builder: ServerBuilder::new(),
             on_connect_fn: None,
             _t: PhantomData,
         }
@@ -113,11 +132,11 @@ where
     /// - `actix_web::rt::net::TcpStream` when no encryption is used.
     ///
     /// See `on_connect` example for additional details.
-    pub fn on_connect<CB>(self, f: CB) -> HttpServer<F, I, S, B>
+    pub fn on_connect<CB>(self, f: CB) -> Self
     where
         CB: Fn(&dyn Any, &mut Extensions) + Send + Sync + 'static,
     {
-        HttpServer {
+        Self {
             factory: self.factory,
             config: self.config,
             backlog: self.backlog,
@@ -513,8 +532,6 @@ where
         mut self,
         lst: std::os::unix::net::UnixListener,
     ) -> io::Result<Self> {
-        use actix_rt::net::UnixStream;
-
         let cfg = self.config.clone();
         let factory = self.factory.clone();
         let socket_addr = net::SocketAddr::new(
@@ -537,23 +554,24 @@ where
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
 
-            pipeline_factory(|io: UnixStream| ok((io, Protocol::Http1, None))).and_then(
-                {
-                    let svc = HttpService::build()
-                        .keep_alive(c.keep_alive)
-                        .client_timeout(c.client_timeout);
+            pipeline_factory(|io: actix_rt::net::UnixStream| {
+                ok((io, Protocol::Http1, None))
+            })
+            .and_then({
+                let svc = HttpService::build()
+                    .keep_alive(c.keep_alive)
+                    .client_timeout(c.client_timeout);
 
-                    let svc = if let Some(handler) = on_connect_fn.clone() {
-                        svc.on_connect_ext(move |io: &_, ext: _| {
-                            (&*handler)(io as &dyn Any, ext)
-                        })
-                    } else {
-                        svc
-                    };
+                let svc = if let Some(handler) = on_connect_fn.clone() {
+                    svc.on_connect_ext(move |io: &_, ext: _| {
+                        (&*handler)(io as &dyn Any, ext)
+                    })
+                } else {
+                    svc
+                };
 
-                    svc.finish(map_config(factory(), move |_| config.clone()))
-                },
-            )
+                svc.finish(map_config(factory(), move |_| config.clone()))
+            })
         })?;
         Ok(self)
     }
@@ -564,8 +582,6 @@ where
     where
         A: AsRef<std::path::Path>,
     {
-        use actix_rt::net::UnixStream;
-
         let cfg = self.config.clone();
         let factory = self.factory.clone();
         let socket_addr = net::SocketAddr::new(
@@ -587,30 +603,20 @@ where
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
-                pipeline_factory(|io: UnixStream| ok((io, Protocol::Http1, None)))
-                    .and_then(
-                        HttpService::build()
-                            .keep_alive(c.keep_alive)
-                            .client_timeout(c.client_timeout)
-                            .finish(map_config(factory(), move |_| config.clone())),
-                    )
+                pipeline_factory(|io: actix_rt::net::UnixStream| {
+                    ok((io, Protocol::Http1, None))
+                })
+                .and_then(
+                    HttpService::build()
+                        .keep_alive(c.keep_alive)
+                        .client_timeout(c.client_timeout)
+                        .finish(map_config(factory(), move |_| config.clone())),
+                )
             },
         )?;
         Ok(self)
     }
-}
 
-impl<F, I, S, B> HttpServer<F, I, S, B>
-where
-    F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: Into<Error>,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
-    S::Service: 'static,
-    B: MessageBody,
-{
     /// Start listening for incoming connections.
     ///
     /// This method starts number of http workers in separate threads.

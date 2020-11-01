@@ -6,6 +6,7 @@ use std::{net, rc::Rc};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::net::TcpStream;
+use actix_rt::RuntimeService;
 use actix_service::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,
@@ -30,7 +31,7 @@ use super::dispatcher::Dispatcher;
 /// `ServiceFactory` implementation for HTTP2 transport
 pub struct H2Service<T, S, B> {
     srv: S,
-    cfg: ServiceConfig,
+    cfg: ServiceConfig<T>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
     _t: PhantomData<(T, B)>,
@@ -38,6 +39,7 @@ pub struct H2Service<T, S, B> {
 
 impl<T, S, B> H2Service<T, S, B>
 where
+    T: RuntimeService,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -46,7 +48,7 @@ where
 {
     /// Create new `HttpService` instance with config.
     pub(crate) fn with_config<F: IntoServiceFactory<S>>(
-        cfg: ServiceConfig,
+        cfg: ServiceConfig<T>,
         service: F,
     ) -> Self {
         H2Service {
@@ -193,19 +195,19 @@ mod rustls {
 
 impl<T, S, B> ServiceFactory for H2Service<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
-    type Config = ();
     type Request = (T, Option<net::SocketAddr>);
     type Response = ();
     type Error = DispatchError;
-    type InitError = S::InitError;
+    type Config = ();
     type Service = H2ServiceHandler<T, S::Service, B>;
+    type InitError = S::InitError;
     type Future = H2ServiceResponse<T, S, B>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -224,7 +226,7 @@ where
 pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
     #[pin]
     fut: S::Future,
-    cfg: Option<ServiceConfig>,
+    cfg: Option<ServiceConfig<T>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
     _t: PhantomData<(T, B)>,
@@ -259,7 +261,7 @@ where
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<T, S: Service, B> {
     srv: CloneableService<S>,
-    cfg: ServiceConfig,
+    cfg: ServiceConfig<T>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
     _t: PhantomData<(T, B)>,
@@ -274,7 +276,7 @@ where
     B: MessageBody + 'static,
 {
     fn new(
-        cfg: ServiceConfig,
+        cfg: ServiceConfig<T>,
         on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
         on_connect_ext: Option<Rc<ConnectCallback<T>>>,
         srv: S,
@@ -291,7 +293,7 @@ where
 
 impl<T, S, B> Service for H2ServiceHandler<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -335,13 +337,13 @@ where
 
 enum State<T, S: Service<Request = Request>, B: MessageBody>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S::Future: 'static,
 {
     Incoming(Dispatcher<T, S, B>),
     Handshake(
         Option<CloneableService<S>>,
-        Option<ServiceConfig>,
+        Option<ServiceConfig<T>>,
         Option<net::SocketAddr>,
         Option<Box<dyn DataFactory>>,
         Option<Extensions>,
@@ -351,7 +353,7 @@ where
 
 pub struct H2ServiceHandlerResponse<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -363,7 +365,7 @@ where
 
 impl<T, S, B> Future for H2ServiceHandlerResponse<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,

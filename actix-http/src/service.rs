@@ -5,6 +5,7 @@ use std::{fmt, net, rc::Rc};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_rt::net::TcpStream;
+use actix_rt::RuntimeService;
 use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use bytes::Bytes;
 use futures_core::{ready, Future};
@@ -25,13 +26,13 @@ use crate::{h1, h2::Dispatcher, ConnectCallback, Extensions, Protocol};
 /// A `ServiceFactory` for HTTP/1.1 or HTTP/2 protocol.
 pub struct HttpService<T, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<T>> {
     srv: S,
-    cfg: ServiceConfig,
+    cfg: ServiceConfig<T>,
     expect: X,
     upgrade: Option<U>,
     // DEPRECATED: in favor of on_connect_ext
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
-    _t: PhantomData<(T, B)>,
+    _t: PhantomData<B>,
 }
 
 impl<T, S, B> HttpService<T, S, B>
@@ -51,6 +52,7 @@ where
 
 impl<T, S, B> HttpService<T, S, B>
 where
+    T: RuntimeService,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -75,7 +77,7 @@ where
 
     /// Create new `HttpService` instance with config.
     pub(crate) fn with_config<F: IntoServiceFactory<S>>(
-        cfg: ServiceConfig,
+        cfg: ServiceConfig<T>,
         service: F,
     ) -> Self {
         HttpService {
@@ -130,7 +132,7 @@ where
     where
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<T, h1::Codec>),
+            Request = (Request, Framed<T, h1::Codec<T>>),
             Response = (),
         >,
         U1::Error: fmt::Display,
@@ -178,7 +180,7 @@ where
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<
         Config = (),
-        Request = (Request, Framed<TcpStream, h1::Codec>),
+        Request = (Request, Framed<TcpStream, h1::Codec<TcpStream>>),
         Response = (),
     >,
     U::Error: fmt::Display + Into<Error>,
@@ -223,7 +225,7 @@ mod openssl {
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<SslStream<TcpStream>, h1::Codec>),
+            Request = (Request, Framed<SslStream<TcpStream>, h1::Codec<T>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -285,7 +287,7 @@ mod rustls {
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<TlsStream<TcpStream>, h1::Codec>),
+            Request = (Request, Framed<TlsStream<TcpStream>, h1::Codec<T>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -331,7 +333,7 @@ mod rustls {
 
 impl<T, S, B, X, U> ServiceFactory for HttpService<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -344,19 +346,19 @@ where
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<
         Config = (),
-        Request = (Request, Framed<T, h1::Codec>),
+        Request = (Request, Framed<T, h1::Codec<T>>),
         Response = (),
     >,
     U::Error: fmt::Display + Into<Error>,
     U::InitError: fmt::Debug,
     <U::Service as Service>::Future: 'static,
 {
-    type Config = ();
     type Request = (T, Protocol, Option<net::SocketAddr>);
     type Response = ();
     type Error = DispatchError;
-    type InitError = ();
+    type Config = ();
     type Service = HttpServiceHandler<T, S::Service, B, X::Service, U::Service>;
+    type InitError = ();
     type Future = HttpServiceResponse<T, S, B, X, U>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -393,8 +395,8 @@ pub struct HttpServiceResponse<
     upgrade: Option<U::Service>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
-    cfg: ServiceConfig,
-    _t: PhantomData<(T, B)>,
+    cfg: ServiceConfig<T>,
+    _t: PhantomData<B>,
 }
 
 impl<T, S, B, X, U> Future for HttpServiceResponse<T, S, B, X, U>
@@ -410,7 +412,7 @@ where
     X::Error: Into<Error>,
     X::InitError: fmt::Debug,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: ServiceFactory<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
     U::InitError: fmt::Debug,
     <U::Service as Service>::Future: 'static,
@@ -463,10 +465,10 @@ pub struct HttpServiceHandler<T, S: Service, B, X: Service, U: Service> {
     srv: CloneableService<S>,
     expect: CloneableService<X>,
     upgrade: Option<CloneableService<U>>,
-    cfg: ServiceConfig,
+    cfg: ServiceConfig<T>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
-    _t: PhantomData<(T, B, X)>,
+    _t: PhantomData<(B, X)>,
 }
 
 impl<T, S, B, X, U> HttpServiceHandler<T, S, B, X, U>
@@ -478,11 +480,11 @@ where
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     fn new(
-        cfg: ServiceConfig,
+        cfg: ServiceConfig<T>,
         srv: S,
         expect: X,
         upgrade: Option<U>,
@@ -503,7 +505,7 @@ where
 
 impl<T, S, B, X, U> Service for HttpServiceHandler<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -511,7 +513,7 @@ where
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display + Into<Error>,
 {
     type Request = (T, Protocol, Option<net::SocketAddr>);
@@ -603,11 +605,11 @@ where
     S: Service<Request = Request>,
     S::Future: 'static,
     S::Error: Into<Error>,
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     H1(#[pin] h1::Dispatcher<T, S, B, X, U>),
@@ -615,7 +617,7 @@ where
     H2Handshake(
         Option<(
             Handshake<T, Bytes>,
-            ServiceConfig,
+            ServiceConfig<T>,
             CloneableService<S>,
             Option<Box<dyn DataFactory>>,
             Extensions,
@@ -627,7 +629,7 @@ where
 #[pin_project]
 pub struct HttpServiceHandlerResponse<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -635,7 +637,7 @@ where
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     #[pin]
@@ -644,7 +646,7 @@ where
 
 impl<T, S, B, X, U> Future for HttpServiceHandlerResponse<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -652,7 +654,7 @@ where
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     type Output = Result<(), DispatchError>;
@@ -664,14 +666,14 @@ where
 
 impl<T, S, B, X, U> State<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, h1::Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     fn poll(

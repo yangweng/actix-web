@@ -196,28 +196,23 @@ pub mod dev {
     }
 }
 
-pub mod client {
-    //! Actix web async HTTP client.
-    //!
-    //! ```rust
-    //! use actix_web::client::Client;
-    //!
-    //! #[actix_web::main]
-    //! async fn main() {
-    //!    let mut client = Client::default();
-    //!
-    //!    // Create request builder and send request
-    //!    let response = client.get("http://www.rust-lang.org")
-    //!       .header("User-Agent", "actix-web/3.0")
-    //!       .send()     // <- Send request
-    //!       .await;     // <- Wait for response
-    //!
-    //!    println!("Response: {:?}", response);
-    //! }
-    //! ```
-
-    pub use awc::error::*;
-    pub use awc::{
-        test, Client, ClientBuilder, ClientRequest, ClientResponse, Connector,
-    };
-}
+// pub mod client {
+//     //! Actix web async HTTP client.
+//     //!
+//     //! ```rust
+//     //! use actix_web::client::Client;
+//     //!
+//     //! #[actix_web::main]
+//     //! async fn main() {
+//     //!    let mut client = Client::default();
+//     //!
+//     //!    // Create request builder and send request
+//     //!    let response = client.get("http://www.rust-lang.org")
+//     //!       .header("User-Agent", "actix-web/3.0")
+//     //!       .send()     // <- Send request
+//     //!       .await;     // <- Wait for response
+//     //!
+//     //!    println!("Response: {:?}", response);
+//     //! }
+//     //! ```
+// }

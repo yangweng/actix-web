@@ -2,11 +2,12 @@ use std::cell::Cell;
 use std::fmt::Write;
 use std::rc::Rc;
 use std::time::Duration;
+use std::time::Instant;
 use std::{fmt, net};
 
-use actix_rt::time::{delay_for, delay_until, Delay, Instant};
+use actix_rt::RuntimeService;
+use bitflags::_core::marker::PhantomData;
 use bytes::BytesMut;
-use futures_util::{future, FutureExt};
 use time::OffsetDateTime;
 
 // "Sun, 06 Nov 1994 08:49:37 GMT".len()
@@ -40,31 +41,31 @@ impl From<Option<usize>> for KeepAlive {
 }
 
 /// Http service configuration
-pub struct ServiceConfig(Rc<Inner>);
+pub struct ServiceConfig<RT>(Rc<Inner<RT>>);
 
-struct Inner {
+struct Inner<RT> {
     keep_alive: Option<Duration>,
     client_timeout: u64,
     client_disconnect: u64,
     ka_enabled: bool,
     secure: bool,
     local_addr: Option<std::net::SocketAddr>,
-    timer: DateService,
+    timer: DateService<RT>,
 }
 
-impl Clone for ServiceConfig {
+impl<RT> Clone for ServiceConfig<RT> {
     fn clone(&self) -> Self {
         ServiceConfig(self.0.clone())
     }
 }
 
-impl Default for ServiceConfig {
+impl<RT: RuntimeService> Default for ServiceConfig<RT> {
     fn default() -> Self {
         Self::new(KeepAlive::Timeout(5), 0, 0, false, None)
     }
 }
 
-impl ServiceConfig {
+impl<RT: RuntimeService> ServiceConfig<RT> {
     /// Create instance of `ServiceConfig`
     pub fn new(
         keep_alive: KeepAlive,
@@ -72,7 +73,7 @@ impl ServiceConfig {
         client_disconnect: u64,
         secure: bool,
         local_addr: Option<net::SocketAddr>,
-    ) -> ServiceConfig {
+    ) -> Self {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val as u64, true),
             KeepAlive::Os => (0, true),
@@ -121,10 +122,10 @@ impl ServiceConfig {
 
     #[inline]
     /// Client timeout for first request.
-    pub fn client_timer(&self) -> Option<Delay> {
+    pub fn client_timer(&self) -> Option<RT::Sleep> {
         let delay_time = self.0.client_timeout;
         if delay_time != 0 {
-            Some(delay_until(
+            Some(RT::sleep_until(
                 self.0.timer.now() + Duration::from_millis(delay_time),
             ))
         } else {
@@ -154,9 +155,9 @@ impl ServiceConfig {
 
     #[inline]
     /// Return keep-alive timer delay is configured.
-    pub fn keep_alive_timer(&self) -> Option<Delay> {
+    pub fn keep_alive_timer(&self) -> Option<RT::Sleep> {
         if let Some(ka) = self.0.keep_alive {
-            Some(delay_until(self.0.timer.now() + ka))
+            Some(RT::sleep_until(self.0.timer.now() + ka))
         } else {
             None
         }
@@ -230,8 +231,7 @@ impl fmt::Write for Date {
     }
 }
 
-#[derive(Clone)]
-struct DateService(Rc<DateServiceInner>);
+struct DateService<RT>(Rc<DateServiceInner>, PhantomData<RT>);
 
 struct DateServiceInner {
     current: Cell<Option<(Date, Instant)>>,
@@ -255,9 +255,12 @@ impl DateServiceInner {
     }
 }
 
-impl DateService {
+impl<RT> DateService<RT>
+where
+    RT: RuntimeService,
+{
     fn new() -> Self {
-        DateService(Rc::new(DateServiceInner::new()))
+        DateService(Rc::new(DateServiceInner::new()), PhantomData)
     }
 
     fn check_date(&self) {
@@ -265,11 +268,11 @@ impl DateService {
             self.0.update();
 
             // periodic date update
-            let s = self.clone();
-            actix_rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
-                s.0.reset();
-                future::ready(())
-            }));
+            let s = Rc::clone(&self.0);
+            RT::spawn(async move {
+                RT::sleep(Duration::from_millis(500)).await;
+                s.reset();
+            });
         }
     }
 

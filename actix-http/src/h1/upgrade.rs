@@ -12,10 +12,10 @@ use crate::request::Request;
 pub struct UpgradeHandler<T>(PhantomData<T>);
 
 impl<T> ServiceFactory for UpgradeHandler<T> {
-    type Config = ();
-    type Request = (Request, Framed<T, Codec>);
+    type Request = (Request, Framed<T, Codec<T>>);
     type Response = ();
     type Error = Error;
+    type Config = ();
     type Service = UpgradeHandler<T>;
     type InitError = Error;
     type Future = Ready<Result<Self::Service, Self::InitError>>;
@@ -26,7 +26,7 @@ impl<T> ServiceFactory for UpgradeHandler<T> {
 }
 
 impl<T> Service for UpgradeHandler<T> {
-    type Request = (Request, Framed<T, Codec>);
+    type Request = (Request, Framed<T, Codec<T>>);
     type Response = ();
     type Error = Error;
     type Future = Ready<Result<Self::Response, Self::Error>>;

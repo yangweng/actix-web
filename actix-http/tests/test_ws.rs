@@ -40,7 +40,7 @@ impl<T> Service for WsService<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + 'static,
 {
-    type Request = (Request, Framed<T, h1::Codec>);
+    type Request = (Request, Framed<T, h1::Codec<T>>);
     type Response = ();
     type Error = Error;
     type Future = Pin<Box<dyn Future<Output = Result<(), Error>>>>;

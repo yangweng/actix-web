@@ -2,10 +2,10 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Instant;
 use std::{fmt, io, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
-use actix_rt::time::{delay_until, Delay, Instant};
 use actix_service::Service;
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
@@ -28,6 +28,7 @@ use crate::{
 use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{Message, MessageType};
+use actix_rt::{RuntimeService, SleepService};
 
 const LW_BUFFER_SIZE: usize = 4096;
 const HW_BUFFER_SIZE: usize = 32_768;
@@ -49,12 +50,13 @@ bitflags! {
 /// Dispatcher for HTTP/1.1 protocol
 pub struct Dispatcher<T, S, B, X, U>
 where
+    T: RuntimeService,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     #[pin]
@@ -64,12 +66,13 @@ where
 #[pin_project(project = DispatcherStateProj)]
 enum DispatcherState<T, S, B, X, U>
 where
+    T: RuntimeService,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     Normal(#[pin] InnerDispatcher<T, S, B, X, U>),
@@ -79,12 +82,13 @@ where
 #[pin_project(project = InnerDispatcherProj)]
 struct InnerDispatcher<T, S, B, X, U>
 where
+    T: RuntimeService,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     service: CloneableService<S>,
@@ -102,12 +106,12 @@ where
     messages: VecDeque<DispatcherMessage>,
 
     ka_expire: Instant,
-    ka_timer: Option<Delay>,
+    ka_timer: Option<T::Sleep>,
 
     io: Option<T>,
     read_buf: BytesMut,
     write_buf: BytesMut,
-    codec: Codec,
+    codec: Codec<T>,
 }
 
 enum DispatcherMessage {
@@ -161,20 +165,20 @@ impl PartialEq for PollResponse {
 
 impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     /// Create HTTP/1 dispatcher.
     pub(crate) fn new(
         stream: T,
-        config: ServiceConfig,
+        config: ServiceConfig<T>,
         service: CloneableService<S>,
         expect: CloneableService<X>,
         upgrade: Option<CloneableService<U>>,
@@ -200,10 +204,10 @@ where
     /// Create http/1 dispatcher with slow request timeout.
     pub(crate) fn with_timeout(
         io: T,
-        codec: Codec,
-        config: ServiceConfig,
+        codec: Codec<T>,
+        config: ServiceConfig<T>,
         read_buf: BytesMut,
-        timeout: Option<Delay>,
+        timeout: Option<T::Sleep>,
         service: CloneableService<S>,
         expect: CloneableService<X>,
         upgrade: Option<CloneableService<U>>,
@@ -220,9 +224,9 @@ where
 
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
-            (delay.deadline(), Some(delay))
+            (delay.sleep_deadline(), Some(delay))
         } else if let Some(delay) = config.keep_alive_timer() {
-            (delay.deadline(), Some(delay))
+            (delay.sleep_deadline(), Some(delay))
         } else {
             (config.now(), None)
         };
@@ -253,14 +257,14 @@ where
 
 impl<T, S, B, X, U> InnerDispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     fn can_read(&self, cx: &mut Context<'_>) -> bool {
@@ -635,7 +639,7 @@ where
             // shutdown timeout
             if this.flags.contains(Flags::SHUTDOWN) {
                 if let Some(interval) = this.codec.config().client_disconnect_timer() {
-                    *this.ka_timer = Some(delay_until(interval));
+                    *this.ka_timer = Some(T::sleep_until(interval));
                 } else {
                     this.flags.insert(Flags::READ_DISCONNECT);
                     if let Some(mut payload) = this.payload.take() {
@@ -653,7 +657,9 @@ where
                 // if we get timeout during shutdown, drop connection
                 if this.flags.contains(Flags::SHUTDOWN) {
                     return Err(DispatchError::DisconnectTimeout);
-                } else if this.ka_timer.as_mut().unwrap().deadline() >= *this.ka_expire {
+                } else if this.ka_timer.as_mut().unwrap().sleep_deadline()
+                    >= *this.ka_expire
+                {
                     // check for any outstanding tasks
                     if this.state.is_empty() && this.write_buf.is_empty() {
                         if this.flags.contains(Flags::STARTED) {
@@ -665,7 +671,7 @@ where
                                 this.codec.config().client_disconnect_timer()
                             {
                                 if let Some(mut timer) = this.ka_timer.as_mut() {
-                                    timer.reset(deadline);
+                                    timer.sleep_reset(deadline);
                                     let _ = Pin::new(&mut timer).poll(cx);
                                 }
                             } else {
@@ -692,12 +698,12 @@ where
                         this.codec.config().keep_alive_expire()
                     {
                         if let Some(mut timer) = this.ka_timer.as_mut() {
-                            timer.reset(deadline);
+                            timer.sleep_reset(deadline);
                             let _ = Pin::new(&mut timer).poll(cx);
                         }
                     }
                 } else if let Some(mut timer) = this.ka_timer.as_mut() {
-                    timer.reset(*this.ka_expire);
+                    timer.sleep_reset(*this.ka_expire);
                     let _ = Pin::new(&mut timer).poll(cx);
                 }
             }
@@ -710,14 +716,14 @@ where
 
 impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     type Output = Result<(), DispatchError>;

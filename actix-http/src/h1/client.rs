@@ -12,6 +12,7 @@ use crate::body::BodySize;
 use crate::config::ServiceConfig;
 use crate::error::{ParseError, PayloadError};
 use crate::message::{ConnectionType, RequestHeadType, ResponseHead};
+use actix_rt::RuntimeService;
 
 bitflags! {
     struct Flags: u8 {
@@ -22,17 +23,17 @@ bitflags! {
 }
 
 /// HTTP/1 Codec
-pub struct ClientCodec {
-    inner: ClientCodecInner,
+pub struct ClientCodec<T> {
+    inner: ClientCodecInner<T>,
 }
 
 /// HTTP/1 Payload Codec
-pub struct ClientPayloadCodec {
-    inner: ClientCodecInner,
+pub struct ClientPayloadCodec<T> {
+    inner: ClientCodecInner<T>,
 }
 
-struct ClientCodecInner {
-    config: ServiceConfig,
+struct ClientCodecInner<T> {
+    config: ServiceConfig<T>,
     decoder: decoder::MessageDecoder<ResponseHead>,
     payload: Option<PayloadDecoder>,
     version: Version,
@@ -43,17 +44,20 @@ struct ClientCodecInner {
     encoder: encoder::MessageEncoder<RequestHeadType>,
 }
 
-impl Default for ClientCodec {
+impl<T: RuntimeService> Default for ClientCodec<T> {
     fn default() -> Self {
         ClientCodec::new(ServiceConfig::default())
     }
 }
 
-impl ClientCodec {
+impl<T> ClientCodec<T>
+where
+    T: RuntimeService
+{
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(config: ServiceConfig) -> Self {
+    pub fn new(config: ServiceConfig<T>) -> Self {
         let flags = if config.keep_alive_enabled() {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -95,24 +99,24 @@ impl ClientCodec {
     }
 
     /// Convert message codec to a payload codec
-    pub fn into_payload_codec(self) -> ClientPayloadCodec {
+    pub fn into_payload_codec(self) -> ClientPayloadCodec<T> {
         ClientPayloadCodec { inner: self.inner }
     }
 }
 
-impl ClientPayloadCodec {
+impl <T>ClientPayloadCodec<T> {
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
         self.inner.ctype == ConnectionType::KeepAlive
     }
 
     /// Transform payload codec to a message codec
-    pub fn into_message_codec(self) -> ClientCodec {
+    pub fn into_message_codec(self) -> ClientCodec<T> {
         ClientCodec { inner: self.inner }
     }
 }
 
-impl Decoder for ClientCodec {
+impl<T> Decoder for ClientCodec<T> {
     type Item = ResponseHead;
     type Error = ParseError;
 
@@ -149,7 +153,7 @@ impl Decoder for ClientCodec {
     }
 }
 
-impl Decoder for ClientPayloadCodec {
+impl<T> Decoder for ClientPayloadCodec<T> {
     type Item = Option<Bytes>;
     type Error = PayloadError;
 
@@ -173,7 +177,7 @@ impl Decoder for ClientPayloadCodec {
     }
 }
 
-impl Encoder<Message<(RequestHeadType, BodySize)>> for ClientCodec {
+impl<T> Encoder<Message<(RequestHeadType, BodySize)>> for ClientCodec<T> {
     type Error = io::Error;
 
     fn encode(

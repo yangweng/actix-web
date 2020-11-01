@@ -37,7 +37,7 @@ pub trait Connection {
     ) -> Self::Future;
 
     type TunnelFuture: Future<
-        Output = Result<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>,
+        Output = Result<(ResponseHead, Framed<Self::Io, ClientCodec<Self::Io>>), SendRequestError>,
     >;
 
     /// Send request, returns Response and Framed
@@ -127,9 +127,9 @@ where
     type TunnelFuture = Either<
         LocalBoxFuture<
             'static,
-            Result<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>,
+            Result<(ResponseHead, Framed<Self::Io, ClientCodec<Self::Io>>), SendRequestError>,
         >,
-        Ready<Result<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>>,
+        Ready<Result<(ResponseHead, Framed<Self::Io, ClientCodec<Self::Io>>), SendRequestError>>,
     >;
 
     /// Send request, returns Response and Framed
@@ -187,7 +187,7 @@ where
 
     type TunnelFuture = LocalBoxFuture<
         'static,
-        Result<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>,
+        Result<(ResponseHead, Framed<Self::Io, ClientCodec<A>>), SendRequestError>,
     >;
 
     /// Send request, returns Response and Framed
@@ -220,6 +220,16 @@ where
     A: AsyncRead,
     B: AsyncRead,
 {
+    unsafe fn prepare_uninitialized_buffer(
+        &self,
+        buf: &mut [mem::MaybeUninit<u8>],
+    ) -> bool {
+        match self {
+            EitherIo::A(ref val) => val.prepare_uninitialized_buffer(buf),
+            EitherIo::B(ref val) => val.prepare_uninitialized_buffer(buf),
+        }
+    }
+
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -228,16 +238,6 @@ where
         match self.project() {
             EitherIoProj::A(val) => val.poll_read(cx, buf),
             EitherIoProj::B(val) => val.poll_read(cx, buf),
-        }
-    }
-
-    unsafe fn prepare_uninitialized_buffer(
-        &self,
-        buf: &mut [mem::MaybeUninit<u8>],
-    ) -> bool {
-        match self {
-            EitherIo::A(ref val) => val.prepare_uninitialized_buffer(buf),
-            EitherIo::B(ref val) => val.prepare_uninitialized_buffer(buf),
         }
     }
 }

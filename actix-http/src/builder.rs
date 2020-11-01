@@ -15,6 +15,7 @@ use crate::request::Request;
 use crate::response::Response;
 use crate::service::HttpService;
 use crate::{ConnectCallback, Extensions};
+use actix_rt::RuntimeService;
 
 /// A HTTP service builder
 ///
@@ -60,6 +61,7 @@ where
 
 impl<T, S, X, U> HttpServiceBuilder<T, S, X, U>
 where
+    T: RuntimeService,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -68,7 +70,11 @@ where
     X::Error: Into<Error>,
     X::InitError: fmt::Debug,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: ServiceFactory<
+        Config = (),
+        Request = (Request, Framed<T, Codec<T>>),
+        Response = (),
+    >,
     U::Error: fmt::Display,
     U::InitError: fmt::Debug,
     <U::Service as Service>::Future: 'static,
@@ -156,7 +162,7 @@ where
         F: IntoServiceFactory<U1>,
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<T, Codec>),
+            Request = (Request, Framed<T, Codec<T>>),
             Response = (),
         >,
         U1::Error: fmt::Display,

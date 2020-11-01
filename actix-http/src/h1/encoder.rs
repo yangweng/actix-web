@@ -14,6 +14,7 @@ use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
 use crate::http::{HeaderMap, StatusCode, Version};
 use crate::message::{ConnectionType, RequestHeadType};
 use crate::response::Response;
+use actix_rt::RuntimeService;
 
 const AVERAGE_HEADER_SIZE: usize = 30;
 
@@ -49,13 +50,13 @@ pub(crate) trait MessageType: Sized {
 
     fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()>;
 
-    fn encode_headers(
+    fn encode_headers<T: RuntimeService>(
         &mut self,
         dst: &mut BytesMut,
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
-        config: &ServiceConfig,
+        config: &ServiceConfig<T>,
     ) -> io::Result<()> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
@@ -277,16 +278,16 @@ impl MessageType for Response<()> {
         Some(self.head().status)
     }
 
-    fn chunked(&self) -> bool {
-        self.head().chunked()
-    }
-
     fn headers(&self) -> &HeaderMap {
         &self.head().headers
     }
 
     fn extra_headers(&self) -> Option<&HeaderMap> {
         None
+    }
+
+    fn chunked(&self) -> bool {
+        self.head().chunked()
     }
 
     fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()> {
@@ -306,20 +307,20 @@ impl MessageType for RequestHeadType {
         None
     }
 
-    fn chunked(&self) -> bool {
-        self.as_ref().chunked()
-    }
-
-    fn camel_case(&self) -> bool {
-        self.as_ref().camel_case_headers()
-    }
-
     fn headers(&self) -> &HeaderMap {
         self.as_ref().headers()
     }
 
     fn extra_headers(&self) -> Option<&HeaderMap> {
         self.extra_headers()
+    }
+
+    fn camel_case(&self) -> bool {
+        self.as_ref().camel_case_headers()
+    }
+
+    fn chunked(&self) -> bool {
+        self.as_ref().chunked()
     }
 
     fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()> {
@@ -347,7 +348,10 @@ impl MessageType for RequestHeadType {
     }
 }
 
-impl<T: MessageType> MessageEncoder<T> {
+impl<T> MessageEncoder<T>
+where
+    T: MessageType,
+{
     /// Encode message
     pub fn encode_chunk(&mut self, msg: &[u8], buf: &mut BytesMut) -> io::Result<bool> {
         self.te.encode(msg, buf)
@@ -358,7 +362,7 @@ impl<T: MessageType> MessageEncoder<T> {
         self.te.encode_eof(buf)
     }
 
-    pub fn encode(
+    pub fn encode<RTS: RuntimeService>(
         &mut self,
         dst: &mut BytesMut,
         message: &mut T,
@@ -367,7 +371,7 @@ impl<T: MessageType> MessageEncoder<T> {
         version: Version,
         length: BodySize,
         ctype: ConnectionType,
-        config: &ServiceConfig,
+        config: &ServiceConfig<RTS>,
     ) -> io::Result<()> {
         // transfer encoding
         if !head {

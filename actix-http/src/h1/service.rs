@@ -7,6 +7,7 @@ use std::{fmt, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_rt::net::TcpStream;
+use actix_rt::RuntimeService;
 use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use futures_core::ready;
 use futures_util::future::{ok, Ready};
@@ -27,12 +28,12 @@ use super::{ExpectHandler, Message, UpgradeHandler};
 /// `ServiceFactory` implementation for HTTP1 transport
 pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
     srv: S,
-    cfg: ServiceConfig,
+    cfg: ServiceConfig<T>,
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
-    _t: PhantomData<(T, B)>,
+    _t: PhantomData<B>,
 }
 
 impl<T, S, B> H1Service<T, S, B>
@@ -45,7 +46,7 @@ where
 {
     /// Create new `HttpService` instance with config.
     pub(crate) fn with_config<F: IntoServiceFactory<S>>(
-        cfg: ServiceConfig,
+        cfg: ServiceConfig<T>,
         service: F,
     ) -> Self {
         H1Service {
@@ -72,7 +73,7 @@ where
     X::InitError: fmt::Debug,
     U: ServiceFactory<
         Config = (),
-        Request = (Request, Framed<TcpStream, Codec>),
+        Request = (Request, Framed<TcpStream, Codec<TcpStream>>),
         Response = (),
     >,
     U::Error: fmt::Display + Into<Error>,
@@ -115,7 +116,7 @@ mod openssl {
         X::InitError: fmt::Debug,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<SslStream<TcpStream>, Codec>),
+            Request = (Request, Framed<SslStream<TcpStream>, Codec<TcpStream>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -165,7 +166,7 @@ mod rustls {
         X::InitError: fmt::Debug,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<TlsStream<TcpStream>, Codec>),
+            Request = (Request, Framed<TlsStream<TcpStream>, Codec<TcpStream>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -223,7 +224,7 @@ where
 
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> H1Service<T, S, B, X, U1>
     where
-        U1: ServiceFactory<Request = (Request, Framed<T, Codec>), Response = ()>,
+        U1: ServiceFactory<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
         U1::Error: fmt::Display,
         U1::InitError: fmt::Debug,
     {
@@ -256,7 +257,7 @@ where
 
 impl<T, S, B, X, U> ServiceFactory for H1Service<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
@@ -265,16 +266,20 @@ where
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
     X::Error: Into<Error>,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<Config = (), Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: ServiceFactory<
+        Config = (),
+        Request = (Request, Framed<T, Codec<T>>),
+        Response = (),
+    >,
     U::Error: fmt::Display + Into<Error>,
     U::InitError: fmt::Debug,
 {
-    type Config = ();
     type Request = (T, Option<net::SocketAddr>);
     type Response = ();
     type Error = DispatchError;
-    type InitError = ();
+    type Config = ();
     type Service = H1ServiceHandler<T, S::Service, B, X::Service, U::Service>;
+    type InitError = ();
     type Future = H1ServiceResponse<T, S, B, X, U>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -302,7 +307,7 @@ where
     X: ServiceFactory<Request = Request, Response = Request>,
     X::Error: Into<Error>,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: ServiceFactory<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
     U::InitError: fmt::Debug,
 {
@@ -316,8 +321,8 @@ where
     upgrade: Option<U::Service>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
-    cfg: Option<ServiceConfig>,
-    _t: PhantomData<(T, B)>,
+    cfg: Option<ServiceConfig<T>>,
+    _t: PhantomData<B>,
 }
 
 impl<T, S, B, X, U> Future for H1ServiceResponse<T, S, B, X, U>
@@ -331,7 +336,7 @@ where
     X: ServiceFactory<Request = Request, Response = Request>,
     X::Error: Into<Error>,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: ServiceFactory<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
     U::InitError: fmt::Debug,
 {
@@ -385,8 +390,8 @@ pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
     upgrade: Option<CloneableService<U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
-    cfg: ServiceConfig,
-    _t: PhantomData<(T, B)>,
+    cfg: ServiceConfig<T>,
+    _t: PhantomData<B>,
 }
 
 impl<T, S, B, X, U> H1ServiceHandler<T, S, B, X, U>
@@ -397,11 +402,11 @@ where
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display,
 {
     fn new(
-        cfg: ServiceConfig,
+        cfg: ServiceConfig<T>,
         srv: S,
         expect: X,
         upgrade: Option<U>,
@@ -422,14 +427,14 @@ where
 
 impl<T, S, B, X, U> Service for H1ServiceHandler<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
     U::Error: fmt::Display + Into<Error>,
 {
     type Request = (T, Option<net::SocketAddr>);
@@ -503,39 +508,36 @@ where
 
 /// `ServiceFactory` implementation for `OneRequestService` service
 #[derive(Default)]
-pub struct OneRequest<T> {
-    config: ServiceConfig,
-    _t: PhantomData<T>,
+pub struct OneRequest<T: RuntimeService> {
+    config: ServiceConfig<T>,
 }
 
 impl<T> OneRequest<T>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
 {
     /// Create new `H1SimpleService` instance.
     pub fn new() -> Self {
         OneRequest {
             config: ServiceConfig::default(),
-            _t: PhantomData,
         }
     }
 }
 
 impl<T> ServiceFactory for OneRequest<T>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
 {
-    type Config = ();
     type Request = T;
-    type Response = (Request, Framed<T, Codec>);
+    type Response = (Request, Framed<T, Codec<T>>);
     type Error = ParseError;
-    type InitError = ();
+    type Config = ();
     type Service = OneRequestService<T>;
+    type InitError = ();
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         ok(OneRequestService {
-            _t: PhantomData,
             config: self.config.clone(),
         })
     }
@@ -544,16 +546,15 @@ where
 /// `Service` implementation for HTTP1 transport. Reads one request and returns
 /// request and framed object.
 pub struct OneRequestService<T> {
-    _t: PhantomData<T>,
-    config: ServiceConfig,
+    config: ServiceConfig<T>,
 }
 
 impl<T> Service for OneRequestService<T>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
 {
     type Request = T;
-    type Response = (Request, Framed<T, Codec>);
+    type Response = (Request, Framed<T, Codec<T>>);
     type Error = ParseError;
     type Future = OneRequestServiceResponse<T>;
 
@@ -575,14 +576,14 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     #[pin]
-    framed: Option<Framed<T, Codec>>,
+    framed: Option<Framed<T, Codec<T>>>,
 }
 
 impl<T> Future for OneRequestServiceResponse<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    type Output = Result<(Request, Framed<T, Codec>), ParseError>;
+    type Output = Result<(Request, Framed<T, Codec<T>>), ParseError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();

@@ -14,6 +14,7 @@ use crate::error::ParseError;
 use crate::message::ConnectionType;
 use crate::request::Request;
 use crate::response::Response;
+use actix_rt::RuntimeService;
 
 bitflags! {
     struct Flags: u8 {
@@ -24,8 +25,8 @@ bitflags! {
 }
 
 /// HTTP/1 Codec
-pub struct Codec {
-    config: ServiceConfig,
+pub struct Codec<T> {
+    config: ServiceConfig<T>,
     decoder: decoder::MessageDecoder<Request>,
     payload: Option<PayloadDecoder>,
     version: Version,
@@ -36,23 +37,23 @@ pub struct Codec {
     encoder: encoder::MessageEncoder<Response<()>>,
 }
 
-impl Default for Codec {
+impl<T: RuntimeService> Default for Codec<T> {
     fn default() -> Self {
         Codec::new(ServiceConfig::default())
     }
 }
 
-impl fmt::Debug for Codec {
+impl<T> fmt::Debug for Codec<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "h1::Codec({:?})", self.flags)
     }
 }
 
-impl Codec {
+impl<T: RuntimeService> Codec<T> {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(config: ServiceConfig) -> Self {
+    pub fn new(config: ServiceConfig<T>) -> Self {
         let flags = if config.keep_alive_enabled() {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -100,12 +101,12 @@ impl Codec {
     }
 
     #[inline]
-    pub fn config(&self) -> &ServiceConfig {
+    pub fn config(&self) -> &ServiceConfig<T> {
         &self.config
     }
 }
 
-impl Decoder for Codec {
+impl<T> Decoder for Codec<T> {
     type Item = Message<Request>;
     type Error = ParseError;
 
@@ -144,7 +145,7 @@ impl Decoder for Codec {
     }
 }
 
-impl Encoder<Message<(Response<()>, BodySize)>> for Codec {
+impl<T: RuntimeService> Encoder<Message<(Response<()>, BodySize)>> for Codec<T> {
     type Error = io::Error;
 
     fn encode(
@@ -169,7 +170,7 @@ impl Encoder<Message<(Response<()>, BodySize)>> for Codec {
                 };
 
                 // encode message
-                self.encoder.encode(
+                self.encoder.encode::<T>(
                     dst,
                     &mut res,
                     self.flags.contains(Flags::HEAD),

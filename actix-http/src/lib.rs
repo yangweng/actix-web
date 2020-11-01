@@ -19,7 +19,7 @@ mod macros;
 
 pub mod body;
 mod builder;
-pub mod client;
+// pub mod client;
 mod cloneable;
 mod config;
 #[cfg(feature = "compress")]

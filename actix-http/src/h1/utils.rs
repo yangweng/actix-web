@@ -16,14 +16,14 @@ pub struct SendResponse<T, B> {
     #[pin]
     body: Option<ResponseBody<B>>,
     #[pin]
-    framed: Option<Framed<T, Codec>>,
+    framed: Option<Framed<T, Codec<T>>>,
 }
 
 impl<T, B> SendResponse<T, B>
 where
     B: MessageBody,
 {
-    pub fn new(framed: Framed<T, Codec>, response: Response<B>) -> Self {
+    pub fn new(framed: Framed<T, Codec<T>>, response: Response<B>) -> Self {
         let (res, body) = response.into_parts();
 
         SendResponse {
@@ -39,7 +39,7 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     B: MessageBody + Unpin,
 {
-    type Output = Result<Framed<T, Codec>, Error>;
+    type Output = Result<Framed<T, Codec<T>>, Error>;
 
     // TODO: rethink if we need loops in polls
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

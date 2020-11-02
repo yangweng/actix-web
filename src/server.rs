@@ -6,13 +6,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use actix_http::{
     body::MessageBody, Error, Extensions, HttpService, KeepAlive, Request, Response,
 };
 use actix_rt::net::TcpStream;
 use actix_rt::{ActixRtFactory, RuntimeFactory};
-use actix_server::{Server, ServerBuilder, ServiceStream};
+use actix_server::{FromMio, Server, ServerBuilder, ServiceStream};
 use actix_service::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
 #[cfg(unix)]
@@ -294,7 +293,7 @@ where
     /// To bind multiple addresses this method can be called multiple times.
     pub fn bind_with<St, A: net::ToSocketAddrs>(mut self, addr: A) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
         A: net::ToSocketAddrs,
     {
         let sockets = self.bind2(addr)?;
@@ -312,7 +311,7 @@ where
     /// it needs to be configured before passing it to listen() method.
     pub fn listen<St>(mut self, lst: net::TcpListener) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
     {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
@@ -434,7 +433,7 @@ where
     /// Start listening for incoming unix domain connections with a custom stream type.
     pub fn bind_uds_with<St, A>(mut self, addr: A) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
         A: AsRef<std::path::Path>,
     {
         let cfg = self.config.clone();
@@ -480,7 +479,7 @@ where
         lst: std::os::unix::net::UnixListener,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
     {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
@@ -560,7 +559,7 @@ where
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
         A: net::ToSocketAddrs,
     {
         let sockets = self.bind2(addr)?;
@@ -581,7 +580,7 @@ where
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
     {
         self.listen_ssl_inner::<St>(lst, openssl_acceptor(builder)?)
     }
@@ -592,7 +591,7 @@ where
         acceptor: SslAcceptor,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
     {
         let factory = self.factory.clone();
         let cfg = self.config.clone();
@@ -668,7 +667,7 @@ where
         config: RustlsServerConfig,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
         A: net::ToSocketAddrs,
     {
         let sockets = self.bind2(addr)?;
@@ -687,7 +686,7 @@ where
         config: RustlsServerConfig,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
     {
         self.listen_rustls_inner::<St>(lst, config)
     }
@@ -698,7 +697,7 @@ where
         config: RustlsServerConfig,
     ) -> io::Result<Self>
     where
-        St: AsyncRead + AsyncWrite + ServiceStream,
+        St: ServiceStream + FromMio,
     {
         let factory = self.factory.clone();
         let cfg = self.config.clone();

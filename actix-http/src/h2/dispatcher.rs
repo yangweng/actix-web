@@ -6,8 +6,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::{RuntimeService, SleepService};
+use actix_server::ServiceStream;
 use actix_service::Service;
 use bytes::{Bytes, BytesMut};
 use h2::server::{Connection, SendResponse};
@@ -33,22 +33,22 @@ const CHUNK_SIZE: usize = 16_384;
 #[pin_project::pin_project]
 pub struct Dispatcher<T, S: Service<Request = Request>, B: MessageBody>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: ServiceStream,
 {
     service: CloneableService<S>,
     connection: Connection<T, Bytes>,
     on_connect: Option<Box<dyn DataFactory>>,
     on_connect_data: Extensions,
-    config: ServiceConfig<T>,
+    config: ServiceConfig<T::Runtime>,
     peer_addr: Option<net::SocketAddr>,
     ka_expire: Instant,
-    ka_timer: Option<T::Sleep>,
+    ka_timer: Option<<T::Runtime as RuntimeService>::Sleep>,
     _t: PhantomData<B>,
 }
 
 impl<T, S, B> Dispatcher<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     // S::Future: 'static,
@@ -60,8 +60,8 @@ where
         connection: Connection<T, Bytes>,
         on_connect: Option<Box<dyn DataFactory>>,
         on_connect_data: Extensions,
-        config: ServiceConfig<T>,
-        timeout: Option<T::Sleep>,
+        config: ServiceConfig<T::Runtime>,
+        timeout: Option<<T::Runtime as RuntimeService>::Sleep>,
         peer_addr: Option<net::SocketAddr>,
     ) -> Self {
         // let keepalive = config.keep_alive_enabled();
@@ -96,7 +96,7 @@ where
 
 impl<T, S, B> Future for Dispatcher<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -144,17 +144,21 @@ where
                     // merge on_connect_ext data into request extensions
                     req.extensions_mut().drain_from(&mut this.on_connect_data);
 
-                    T::spawn(
-                        ServiceResponse::<T, S::Future, S::Response, S::Error, B> {
-                            state: ServiceResponseState::ServiceCall(
-                                this.service.call(req),
-                                Some(res),
-                            ),
-                            config: this.config.clone(),
-                            buffer: None,
-                            _t: PhantomData,
-                        },
-                    );
+                    <T::Runtime as RuntimeService>::spawn(ServiceResponse::<
+                        T,
+                        S::Future,
+                        S::Response,
+                        S::Error,
+                        B,
+                    > {
+                        state: ServiceResponseState::ServiceCall(
+                            this.service.call(req),
+                            Some(res),
+                        ),
+                        config: this.config.clone(),
+                        buffer: None,
+                        _t: PhantomData,
+                    });
                 }
                 Poll::Pending => return Poll::Pending,
             }
@@ -163,10 +167,10 @@ where
 }
 
 #[pin_project::pin_project]
-struct ServiceResponse<T, F, I, E, B> {
+struct ServiceResponse<T: ServiceStream, F, I, E, B> {
     #[pin]
     state: ServiceResponseState<F, B>,
-    config: ServiceConfig<T>,
+    config: ServiceConfig<T::Runtime>,
     buffer: Option<Bytes>,
     _t: PhantomData<(I, E)>,
 }
@@ -179,7 +183,7 @@ enum ServiceResponseState<F, B> {
 
 impl<T, F, I, E, B> ServiceResponse<T, F, I, E, B>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     F: Future<Output = Result<I, E>>,
     E: Into<Error>,
     I: Into<Response<B>>,
@@ -247,7 +251,7 @@ where
 
 impl<T, F, I, E, B> Future for ServiceResponse<T, F, I, E, B>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     F: Future<Output = Result<I, E>>,
     E: Into<Error>,
     I: Into<Response<B>>,

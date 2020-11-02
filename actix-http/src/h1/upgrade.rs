@@ -8,11 +8,12 @@ use futures_util::future::Ready;
 use crate::error::Error;
 use crate::h1::Codec;
 use crate::request::Request;
+use actix_server::ServiceStream;
 
 pub struct UpgradeHandler<T>(PhantomData<T>);
 
-impl<T> ServiceFactory for UpgradeHandler<T> {
-    type Request = (Request, Framed<T, Codec<T>>);
+impl<T: ServiceStream> ServiceFactory for UpgradeHandler<T> {
+    type Request = (Request, Framed<T, Codec<T::Runtime>>);
     type Response = ();
     type Error = Error;
     type Config = ();
@@ -25,8 +26,8 @@ impl<T> ServiceFactory for UpgradeHandler<T> {
     }
 }
 
-impl<T> Service for UpgradeHandler<T> {
-    type Request = (Request, Framed<T, Codec<T>>);
+impl<T: ServiceStream> Service for UpgradeHandler<T> {
+    type Request = (Request, Framed<T, Codec<T::Runtime>>);
     type Response = ();
     type Error = Error;
     type Future = Ready<Result<Self::Response, Self::Error>>;

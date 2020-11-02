@@ -4,9 +4,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{net, rc::Rc};
 
-use actix_codec::{AsyncRead, AsyncWrite};
-use actix_rt::net::TcpStream;
-use actix_rt::RuntimeService;
 use actix_service::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,
@@ -27,11 +24,15 @@ use crate::response::Response;
 use crate::{ConnectCallback, Extensions};
 
 use super::dispatcher::Dispatcher;
+use actix_server::ServiceStream;
 
 /// `ServiceFactory` implementation for HTTP2 transport
-pub struct H2Service<T, S, B> {
+pub struct H2Service<T, S, B>
+where
+    T: ServiceStream,
+{
     srv: S,
-    cfg: ServiceConfig<T>,
+    cfg: ServiceConfig<T::Runtime>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
     _t: PhantomData<(T, B)>,
@@ -39,7 +40,7 @@ pub struct H2Service<T, S, B> {
 
 impl<T, S, B> H2Service<T, S, B>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -48,7 +49,7 @@ where
 {
     /// Create new `HttpService` instance with config.
     pub(crate) fn with_config<F: IntoServiceFactory<S>>(
-        cfg: ServiceConfig<T>,
+        cfg: ServiceConfig<T::Runtime>,
         service: F,
     ) -> Self {
         H2Service {
@@ -77,8 +78,9 @@ where
     }
 }
 
-impl<S, B> H2Service<TcpStream, S, B>
+impl<T, S, B> H2Service<T, S, B>
 where
+    T: ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -90,14 +92,14 @@ where
         self,
     ) -> impl ServiceFactory<
         Config = (),
-        Request = TcpStream,
+        Request = T,
         Response = (),
         Error = DispatchError,
         InitError = S::InitError,
     > {
         pipeline_factory(fn_factory(|| async {
-            Ok::<_, S::InitError>(fn_service(|io: TcpStream| {
-                let peer_addr = io.peer_addr().ok();
+            Ok::<_, S::InitError>(fn_service(|io: T| {
+                let peer_addr = io.peer_addr();
                 ok::<_, DispatchError>((io, peer_addr))
             }))
         }))
@@ -113,8 +115,9 @@ mod openssl {
 
     use super::*;
 
-    impl<S, B> H2Service<SslStream<TcpStream>, S, B>
+    impl<T, S, B> H2Service<SslStream<T>, S, B>
     where
+        T: ServiceStream,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: Into<Error> + 'static,
         S::Response: Into<Response<B>> + 'static,
@@ -127,9 +130,9 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = T,
             Response = (),
-            Error = TlsError<HandshakeError<TcpStream>, DispatchError>,
+            Error = TlsError<HandshakeError<T>, DispatchError>,
             InitError = S::InitError,
         > {
             pipeline_factory(
@@ -138,8 +141,8 @@ mod openssl {
                     .map_init_err(|_| panic!()),
             )
             .and_then(fn_factory(|| {
-                ok::<_, S::InitError>(fn_service(|io: SslStream<TcpStream>| {
-                    let peer_addr = io.get_ref().peer_addr().ok();
+                ok::<_, S::InitError>(fn_service(|io: SslStream<T>| {
+                    let peer_addr = io.peer_addr();
                     ok((io, peer_addr))
                 }))
             }))
@@ -155,8 +158,9 @@ mod rustls {
     use actix_tls::TlsError;
     use std::io;
 
-    impl<S, B> H2Service<TlsStream<TcpStream>, S, B>
+    impl<T, S, B> H2Service<TlsStream<T>, S, B>
     where
+        T: ServiceStream,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: Into<Error> + 'static,
         S::Response: Into<Response<B>> + 'static,
@@ -169,7 +173,7 @@ mod rustls {
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = T,
             Response = (),
             Error = TlsError<io::Error, DispatchError>,
             InitError = S::InitError,
@@ -183,8 +187,8 @@ mod rustls {
                     .map_init_err(|_| panic!()),
             )
             .and_then(fn_factory(|| {
-                ok::<_, S::InitError>(fn_service(|io: TlsStream<TcpStream>| {
-                    let peer_addr = io.get_ref().0.peer_addr().ok();
+                ok::<_, S::InitError>(fn_service(|io: TlsStream<T>| {
+                    let peer_addr = io.peer_addr();
                     ok((io, peer_addr))
                 }))
             }))
@@ -195,7 +199,7 @@ mod rustls {
 
 impl<T, S, B> ServiceFactory for H2Service<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
+    T: ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -223,10 +227,13 @@ where
 
 #[doc(hidden)]
 #[pin_project::pin_project]
-pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
+pub struct H2ServiceResponse<T, S: ServiceFactory, B>
+where
+    T: ServiceStream,
+{
     #[pin]
     fut: S::Future,
-    cfg: Option<ServiceConfig<T>>,
+    cfg: Option<ServiceConfig<T::Runtime>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
     _t: PhantomData<(T, B)>,
@@ -234,7 +241,7 @@ pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
 
 impl<T, S, B> Future for H2ServiceResponse<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -259,9 +266,12 @@ where
 }
 
 /// `Service` implementation for http/2 transport
-pub struct H2ServiceHandler<T, S: Service, B> {
+pub struct H2ServiceHandler<T, S: Service, B>
+where
+    T: ServiceStream,
+{
     srv: CloneableService<S>,
-    cfg: ServiceConfig<T>,
+    cfg: ServiceConfig<T::Runtime>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_connect_ext: Option<Rc<ConnectCallback<T>>>,
     _t: PhantomData<(T, B)>,
@@ -269,6 +279,7 @@ pub struct H2ServiceHandler<T, S: Service, B> {
 
 impl<T, S, B> H2ServiceHandler<T, S, B>
 where
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -276,7 +287,7 @@ where
     B: MessageBody + 'static,
 {
     fn new(
-        cfg: ServiceConfig<T>,
+        cfg: ServiceConfig<T::Runtime>,
         on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
         on_connect_ext: Option<Rc<ConnectCallback<T>>>,
         srv: S,
@@ -293,7 +304,7 @@ where
 
 impl<T, S, B> Service for H2ServiceHandler<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -337,13 +348,13 @@ where
 
 enum State<T, S: Service<Request = Request>, B: MessageBody>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: ServiceStream,
     S::Future: 'static,
 {
     Incoming(Dispatcher<T, S, B>),
     Handshake(
         Option<CloneableService<S>>,
-        Option<ServiceConfig<T>>,
+        Option<ServiceConfig<T::Runtime>>,
         Option<net::SocketAddr>,
         Option<Box<dyn DataFactory>>,
         Option<Extensions>,
@@ -353,7 +364,7 @@ where
 
 pub struct H2ServiceHandlerResponse<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -365,7 +376,7 @@ where
 
 impl<T, S, B> Future for H2ServiceHandlerResponse<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,

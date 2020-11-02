@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::{fmt, net};
 
 use actix_codec::Framed;
+use actix_server::ServiceStream;
 use actix_service::{IntoServiceFactory, Service, ServiceFactory};
 
 use crate::body::MessageBody;
@@ -15,7 +16,6 @@ use crate::request::Request;
 use crate::response::Response;
 use crate::service::HttpService;
 use crate::{ConnectCallback, Extensions};
-use actix_rt::RuntimeService;
 
 /// A HTTP service builder
 ///
@@ -37,6 +37,7 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
 
 impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>>
 where
+    T: ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -61,7 +62,7 @@ where
 
 impl<T, S, X, U> HttpServiceBuilder<T, S, X, U>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -72,7 +73,7 @@ where
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<
         Config = (),
-        Request = (Request, Framed<T, Codec<T>>),
+        Request = (Request, Framed<T, Codec<T::Runtime>>),
         Response = (),
     >,
     U::Error: fmt::Display,
@@ -162,7 +163,7 @@ where
         F: IntoServiceFactory<U1>,
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<T, Codec<T>>),
+            Request = (Request, Framed<T, Codec<T::Runtime>>),
             Response = (),
         >,
         U1::Error: fmt::Display,

@@ -29,6 +29,7 @@ use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{Message, MessageType};
 use actix_rt::{RuntimeService, SleepService};
+use actix_server::ServiceStream;
 
 const LW_BUFFER_SIZE: usize = 4096;
 const HW_BUFFER_SIZE: usize = 32_768;
@@ -50,13 +51,13 @@ bitflags! {
 /// Dispatcher for HTTP/1.1 protocol
 pub struct Dispatcher<T, S, B, X, U>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T::Runtime>>), Response = ()>,
     U::Error: fmt::Display,
 {
     #[pin]
@@ -66,13 +67,13 @@ where
 #[pin_project(project = DispatcherStateProj)]
 enum DispatcherState<T, S, B, X, U>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T::Runtime>>), Response = ()>,
     U::Error: fmt::Display,
 {
     Normal(#[pin] InnerDispatcher<T, S, B, X, U>),
@@ -82,13 +83,13 @@ where
 #[pin_project(project = InnerDispatcherProj)]
 struct InnerDispatcher<T, S, B, X, U>
 where
-    T: RuntimeService,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T::Runtime>>), Response = ()>,
     U::Error: fmt::Display,
 {
     service: CloneableService<S>,
@@ -106,12 +107,12 @@ where
     messages: VecDeque<DispatcherMessage>,
 
     ka_expire: Instant,
-    ka_timer: Option<T::Sleep>,
+    ka_timer: Option<<T::Runtime as RuntimeService>::Sleep>,
 
     io: Option<T>,
     read_buf: BytesMut,
     write_buf: BytesMut,
-    codec: Codec<T>,
+    codec: Codec<T::Runtime>,
 }
 
 enum DispatcherMessage {
@@ -165,20 +166,20 @@ impl PartialEq for PollResponse {
 
 impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T::Runtime>>), Response = ()>,
     U::Error: fmt::Display,
 {
     /// Create HTTP/1 dispatcher.
     pub(crate) fn new(
         stream: T,
-        config: ServiceConfig<T>,
+        config: ServiceConfig<T::Runtime>,
         service: CloneableService<S>,
         expect: CloneableService<X>,
         upgrade: Option<CloneableService<U>>,
@@ -204,10 +205,10 @@ where
     /// Create http/1 dispatcher with slow request timeout.
     pub(crate) fn with_timeout(
         io: T,
-        codec: Codec<T>,
-        config: ServiceConfig<T>,
+        codec: Codec<T::Runtime>,
+        config: ServiceConfig<T::Runtime>,
         read_buf: BytesMut,
-        timeout: Option<T::Sleep>,
+        timeout: Option<<T::Runtime as RuntimeService>::Sleep>,
         service: CloneableService<S>,
         expect: CloneableService<X>,
         upgrade: Option<CloneableService<U>>,
@@ -257,14 +258,14 @@ where
 
 impl<T, S, B, X, U> InnerDispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T::Runtime>>), Response = ()>,
     U::Error: fmt::Display,
 {
     fn can_read(&self, cx: &mut Context<'_>) -> bool {
@@ -639,7 +640,8 @@ where
             // shutdown timeout
             if this.flags.contains(Flags::SHUTDOWN) {
                 if let Some(interval) = this.codec.config().client_disconnect_timer() {
-                    *this.ka_timer = Some(T::sleep_until(interval));
+                    *this.ka_timer =
+                        Some(<T::Runtime as RuntimeService>::sleep_until(interval));
                 } else {
                     this.flags.insert(Flags::READ_DISCONNECT);
                     if let Some(mut payload) = this.payload.take() {
@@ -716,14 +718,14 @@ where
 
 impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: Into<Error>,
-    U: Service<Request = (Request, Framed<T, Codec<T>>), Response = ()>,
+    U: Service<Request = (Request, Framed<T, Codec<T::Runtime>>), Response = ()>,
     U::Error: fmt::Display,
 {
     type Output = Result<(), DispatchError>;

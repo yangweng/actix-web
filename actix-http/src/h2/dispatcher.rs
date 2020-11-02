@@ -96,7 +96,7 @@ where
 
 impl<T, S, B> Future for Dispatcher<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,

@@ -6,8 +6,8 @@ use std::task::{Context, Poll};
 use std::{fmt, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_rt::net::TcpStream;
 use actix_rt::RuntimeService;
+use actix_server::ServiceStream;
 use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use futures_core::ready;
 use futures_util::future::{ok, Ready};
@@ -61,8 +61,9 @@ where
     }
 }
 
-impl<S, B, X, U> H1Service<TcpStream, S, B, X, U>
+impl<T, S, B, X, U> H1Service<T, S, B, X, U>
 where
+    T: AsyncRead + AsyncWrite + ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error>,
     S::InitError: fmt::Debug,
@@ -73,7 +74,7 @@ where
     X::InitError: fmt::Debug,
     U: ServiceFactory<
         Config = (),
-        Request = (Request, Framed<TcpStream, Codec<TcpStream>>),
+        Request = (Request, Framed<T, Codec<T>>),
         Response = (),
     >,
     U::Error: fmt::Display + Into<Error>,
@@ -84,13 +85,13 @@ where
         self,
     ) -> impl ServiceFactory<
         Config = (),
-        Request = TcpStream,
+        Request = T,
         Response = (),
         Error = DispatchError,
         InitError = (),
     > {
-        pipeline_factory(|io: TcpStream| {
-            let peer_addr = io.peer_addr().ok();
+        pipeline_factory(|io: T| {
+            let peer_addr = io.peer_addr();
             ok((io, peer_addr))
         })
         .and_then(self)
@@ -104,8 +105,10 @@ mod openssl {
     use actix_tls::openssl::{Acceptor, SslAcceptor, SslStream};
     use actix_tls::{openssl::HandshakeError, TlsError};
 
-    impl<S, B, X, U> H1Service<SslStream<TcpStream>, S, B, X, U>
+    impl<T, S, B, X, U> H1Service<SslStream<T>, S, B, X, U>
     where
+        SslStream<T>: RuntimeService,
+        T: AsyncRead + AsyncWrite + ServiceStream,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: Into<Error>,
         S::InitError: fmt::Debug,
@@ -116,7 +119,7 @@ mod openssl {
         X::InitError: fmt::Debug,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<SslStream<TcpStream>, Codec<TcpStream>>),
+            Request = (Request, Framed<SslStream<T>, Codec<SslStream<T>>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -128,9 +131,9 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = T,
             Response = (),
-            Error = TlsError<HandshakeError<TcpStream>, DispatchError>,
+            Error = TlsError<HandshakeError<T>, DispatchError>,
             InitError = (),
         > {
             pipeline_factory(
@@ -138,8 +141,8 @@ mod openssl {
                     .map_err(TlsError::Tls)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: SslStream<TcpStream>| {
-                let peer_addr = io.get_ref().peer_addr().ok();
+            .and_then(|io: SslStream<T>| {
+                let peer_addr = io.get_ref().peer_addr();
                 ok((io, peer_addr))
             })
             .and_then(self.map_err(TlsError::Service))
@@ -154,8 +157,10 @@ mod rustls {
     use actix_tls::TlsError;
     use std::{fmt, io};
 
-    impl<S, B, X, U> H1Service<TlsStream<TcpStream>, S, B, X, U>
+    impl<T, S, B, X, U> H1Service<TlsStream<T>, S, B, X, U>
     where
+        TlsStream<T>: RuntimeService,
+        T: AsyncRead + AsyncWrite + ServiceStream,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: Into<Error>,
         S::InitError: fmt::Debug,
@@ -166,7 +171,7 @@ mod rustls {
         X::InitError: fmt::Debug,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<TlsStream<TcpStream>, Codec<TcpStream>>),
+            Request = (Request, Framed<TlsStream<T>, Codec<TlsStream<T>>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -178,7 +183,7 @@ mod rustls {
             config: ServerConfig,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = T,
             Response = (),
             Error = TlsError<io::Error, DispatchError>,
             InitError = (),
@@ -188,8 +193,8 @@ mod rustls {
                     .map_err(TlsError::Tls)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: TlsStream<TcpStream>| {
-                let peer_addr = io.get_ref().0.peer_addr().ok();
+            .and_then(|io: TlsStream<T>| {
+                let peer_addr = io.get_ref().0.peer_addr();
                 ok((io, peer_addr))
             })
             .and_then(self.map_err(TlsError::Service))

@@ -4,8 +4,8 @@ use std::task::{Context, Poll};
 use std::{fmt, net, rc::Rc};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_rt::net::TcpStream;
 use actix_rt::RuntimeService;
+use actix_server::ServiceStream;
 use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use bytes::Bytes;
 use futures_core::{ready, Future};
@@ -166,8 +166,9 @@ where
     }
 }
 
-impl<S, B, X, U> HttpService<TcpStream, S, B, X, U>
+impl<T, S, B, X, U> HttpService<T, S, B, X, U>
 where
+    T: AsyncRead + AsyncWrite + ServiceStream,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -180,7 +181,7 @@ where
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<
         Config = (),
-        Request = (Request, Framed<TcpStream, h1::Codec<TcpStream>>),
+        Request = (Request, Framed<T, h1::Codec<T>>),
         Response = (),
     >,
     U::Error: fmt::Display + Into<Error>,
@@ -192,13 +193,13 @@ where
         self,
     ) -> impl ServiceFactory<
         Config = (),
-        Request = TcpStream,
+        Request = T,
         Response = (),
         Error = DispatchError,
         InitError = (),
     > {
-        pipeline_factory(|io: TcpStream| {
-            let peer_addr = io.peer_addr().ok();
+        pipeline_factory(|io: T| {
+            let peer_addr = io.peer_addr();
             ok((io, Protocol::Http1, peer_addr))
         })
         .and_then(self)
@@ -208,11 +209,13 @@ where
 #[cfg(feature = "openssl")]
 mod openssl {
     use super::*;
-    use actix_tls::openssl::{Acceptor, SslAcceptor, SslStream};
-    use actix_tls::{openssl::HandshakeError, TlsError};
+    use actix_tls::openssl::{Acceptor, HandshakeError, SslAcceptor, SslStream};
+    use actix_tls::TlsError;
 
-    impl<S, B, X, U> HttpService<SslStream<TcpStream>, S, B, X, U>
+    impl<T, S, B, X, U> HttpService<SslStream<T>, S, B, X, U>
     where
+        SslStream<T>: RuntimeService,
+        T: AsyncRead + AsyncWrite + ServiceStream,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: Into<Error> + 'static,
         S::InitError: fmt::Debug,
@@ -225,7 +228,7 @@ mod openssl {
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<SslStream<TcpStream>, h1::Codec<T>>),
+            Request = (Request, Framed<SslStream<T>, h1::Codec<SslStream<T>>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -238,9 +241,9 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = T,
             Response = (),
-            Error = TlsError<HandshakeError<TcpStream>, DispatchError>,
+            Error = TlsError<HandshakeError<T>, DispatchError>,
             InitError = (),
         > {
             pipeline_factory(
@@ -248,7 +251,7 @@ mod openssl {
                     .map_err(TlsError::Tls)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: SslStream<TcpStream>| {
+            .and_then(|io: SslStream<T>| {
                 let proto = if let Some(protos) = io.ssl().selected_alpn_protocol() {
                     if protos.windows(2).any(|window| window == b"h2") {
                         Protocol::Http2
@@ -258,7 +261,7 @@ mod openssl {
                 } else {
                     Protocol::Http1
                 };
-                let peer_addr = io.get_ref().peer_addr().ok();
+                let peer_addr = io.get_ref().peer_addr();
                 ok((io, proto, peer_addr))
             })
             .and_then(self.map_err(TlsError::Service))
@@ -269,12 +272,16 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use super::*;
-    use actix_tls::rustls::{Acceptor, ServerConfig, Session, TlsStream};
-    use actix_tls::TlsError;
+
     use std::io;
 
-    impl<S, B, X, U> HttpService<TlsStream<TcpStream>, S, B, X, U>
+    use actix_tls::rustls::{Acceptor, ServerConfig, Session, TlsStream};
+    use actix_tls::TlsError;
+
+    impl<T, S, B, X, U> HttpService<TlsStream<T>, S, B, X, U>
     where
+        TlsStream<T>: RuntimeService,
+        T: AsyncRead + AsyncWrite + ServiceStream,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: Into<Error> + 'static,
         S::InitError: fmt::Debug,
@@ -287,7 +294,7 @@ mod rustls {
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<TlsStream<TcpStream>, h1::Codec<T>>),
+            Request = (Request, Framed<TlsStream<T>, h1::Codec<TlsStream<T>>>),
             Response = (),
         >,
         U::Error: fmt::Display + Into<Error>,
@@ -300,7 +307,7 @@ mod rustls {
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = T,
             Response = (),
             Error = TlsError<io::Error, DispatchError>,
             InitError = (),
@@ -313,7 +320,7 @@ mod rustls {
                     .map_err(TlsError::Tls)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: TlsStream<TcpStream>| {
+            .and_then(|io: TlsStream<T>| {
                 let proto = if let Some(protos) = io.get_ref().1.get_alpn_protocol() {
                     if protos.windows(2).any(|window| window == b"h2") {
                         Protocol::Http2
@@ -323,7 +330,7 @@ mod rustls {
                 } else {
                     Protocol::Http1
                 };
-                let peer_addr = io.get_ref().0.peer_addr().ok();
+                let peer_addr = io.get_ref().0.peer_addr();
                 ok((io, proto, peer_addr))
             })
             .and_then(self.map_err(TlsError::Service))
@@ -333,7 +340,7 @@ mod rustls {
 
 impl<T, S, B, X, U> ServiceFactory for HttpService<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::InitError: fmt::Debug,
@@ -505,7 +512,7 @@ where
 
 impl<T, S, B, X, U> Service for HttpServiceHandler<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -646,7 +653,7 @@ where
 
 impl<T, S, B, X, U> Future for HttpServiceHandlerResponse<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -666,7 +673,7 @@ where
 
 impl<T, S, B, X, U> State<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,

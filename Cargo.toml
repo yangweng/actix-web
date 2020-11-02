@@ -130,6 +130,11 @@ actix-web-codegen = { path = "actix-web-codegen" }
 actix-files = { path = "actix-files" }
 actix-multipart = { path = "actix-multipart" }
 
+#actix-rt = { path = "../actix-net-fs/actix-rt" }
+#actix-server = { path = "../actix-net-fs/actix-server" }
+#actix-tls = { path = "../actix-net-fs/actix-tls" }
+#actix-testing = { path = "../actix-net-fs/actix-testing" }
+
 [[bench]]
 name = "server"
 harness = false

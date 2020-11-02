@@ -195,7 +195,7 @@ mod rustls {
 
 impl<T, S, B> ServiceFactory for H2Service<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -293,7 +293,7 @@ where
 
 impl<T, S, B> Service for H2ServiceHandler<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,
@@ -365,7 +365,7 @@ where
 
 impl<T, S, B> Future for H2ServiceHandlerResponse<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin,
+    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: Into<Error> + 'static,
     S::Future: 'static,

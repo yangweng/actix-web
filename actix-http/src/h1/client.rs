@@ -23,17 +23,17 @@ bitflags! {
 }
 
 /// HTTP/1 Codec
-pub struct ClientCodec<T> {
-    inner: ClientCodecInner<T>,
+pub struct ClientCodec<RT> {
+    inner: ClientCodecInner<RT>,
 }
 
 /// HTTP/1 Payload Codec
-pub struct ClientPayloadCodec<T> {
-    inner: ClientCodecInner<T>,
+pub struct ClientPayloadCodec<RT> {
+    inner: ClientCodecInner<RT>,
 }
 
-struct ClientCodecInner<T> {
-    config: ServiceConfig<T>,
+struct ClientCodecInner<RT> {
+    config: ServiceConfig<RT>,
     decoder: decoder::MessageDecoder<ResponseHead>,
     payload: Option<PayloadDecoder>,
     version: Version,
@@ -44,20 +44,17 @@ struct ClientCodecInner<T> {
     encoder: encoder::MessageEncoder<RequestHeadType>,
 }
 
-impl<T: RuntimeService> Default for ClientCodec<T> {
+impl<RT: RuntimeService> Default for ClientCodec<RT> {
     fn default() -> Self {
         ClientCodec::new(ServiceConfig::default())
     }
 }
 
-impl<T> ClientCodec<T>
-where
-    T: RuntimeService
-{
+impl<RT: RuntimeService> ClientCodec<RT> {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(config: ServiceConfig<T>) -> Self {
+    pub fn new(config: ServiceConfig<RT>) -> Self {
         let flags = if config.keep_alive_enabled() {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -99,24 +96,24 @@ where
     }
 
     /// Convert message codec to a payload codec
-    pub fn into_payload_codec(self) -> ClientPayloadCodec<T> {
+    pub fn into_payload_codec(self) -> ClientPayloadCodec<RT> {
         ClientPayloadCodec { inner: self.inner }
     }
 }
 
-impl <T>ClientPayloadCodec<T> {
+impl<RT> ClientPayloadCodec<RT> {
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
         self.inner.ctype == ConnectionType::KeepAlive
     }
 
     /// Transform payload codec to a message codec
-    pub fn into_message_codec(self) -> ClientCodec<T> {
+    pub fn into_message_codec(self) -> ClientCodec<RT> {
         ClientCodec { inner: self.inner }
     }
 }
 
-impl<T> Decoder for ClientCodec<T> {
+impl<RT> Decoder for ClientCodec<RT> {
     type Item = ResponseHead;
     type Error = ParseError;
 
@@ -153,7 +150,7 @@ impl<T> Decoder for ClientCodec<T> {
     }
 }
 
-impl<T> Decoder for ClientPayloadCodec<T> {
+impl<RT> Decoder for ClientPayloadCodec<RT> {
     type Item = Option<Bytes>;
     type Error = PayloadError;
 
@@ -177,7 +174,9 @@ impl<T> Decoder for ClientPayloadCodec<T> {
     }
 }
 
-impl<T> Encoder<Message<(RequestHeadType, BodySize)>> for ClientCodec<T> {
+impl<RT: RuntimeService> Encoder<Message<(RequestHeadType, BodySize)>>
+    for ClientCodec<RT>
+{
     type Error = io::Error;
 
     fn encode(

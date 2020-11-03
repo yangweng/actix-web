@@ -1,7 +1,7 @@
 //! HTTP/1 implementation
 use bytes::{Bytes, BytesMut};
 
-// mod client;
+mod client;
 mod codec;
 mod decoder;
 mod dispatcher;
@@ -12,7 +12,7 @@ mod service;
 mod upgrade;
 // mod utils;
 
-// pub use self::client::{ClientCodec, ClientPayloadCodec};
+pub use self::client::{ClientCodec, ClientPayloadCodec};
 pub use self::codec::Codec;
 pub use self::dispatcher::Dispatcher;
 pub use self::expect::ExpectHandler;

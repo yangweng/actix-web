@@ -28,6 +28,7 @@ path = "src/lib.rs"
 [workspace]
 members = [
   ".",
+#  "awc",
   "actix-http",
   "actix-files",
   "actix-multipart",
@@ -85,6 +86,7 @@ actix-tls = "2.0.0"
 
 actix-web-codegen = "0.4.0"
 actix-http = "2.1.0"
+#awc = { version = "2.0.0", default-features = false }
 
 bytes = "0.5.3"
 derive_more = "0.99.2"
@@ -129,10 +131,12 @@ actix-http-test = { path = "test-server" }
 actix-web-codegen = { path = "actix-web-codegen" }
 actix-files = { path = "actix-files" }
 actix-multipart = { path = "actix-multipart" }
-actix-rt = { path = "../actix-net-fs/actix-rt" }
-actix-server = { path = "../actix-net-fs/actix-server" }
-actix-tls = { path = "../actix-net-fs/actix-tls" }
-actix-testing = { path = "../actix-net-fs/actix-testing" }
+awc = { path = "awc" }
+
+#actix-rt = { path = "../actix-net-fs/actix-rt" }
+#actix-server = { path = "../actix-net-fs/actix-server" }
+#actix-tls = { path = "../actix-net-fs/actix-tls" }
+#actix-testing = { path = "../actix-net-fs/actix-testing" }
 
 [[bench]]
 name = "server"

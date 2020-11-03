@@ -89,7 +89,25 @@ where
 {
     /// Create new http server with application factory
     pub fn new(factory: F) -> Self {
-        Self::new_with(factory)
+        Self::new_with::<ActixRtFactory>(factory)
+    }
+
+    /// Create new http server with application factory
+    pub fn new_with<RT: RuntimeFactory>(factory: F) -> HttpServer<F, I, S, B, RT> {
+        HttpServer {
+            factory,
+            config: Arc::new(Mutex::new(Config {
+                host: None,
+                keep_alive: KeepAlive::Timeout(5),
+                client_timeout: 5000,
+                client_shutdown: 5000,
+            })),
+            backlog: 1024,
+            sockets: Vec::new(),
+            builder: ServerBuilder::<RT>::new(),
+            on_connect_fn: None,
+            _t: PhantomData,
+        }
     }
 }
 
@@ -105,24 +123,6 @@ where
     B: MessageBody + 'static,
     RT: RuntimeFactory,
 {
-    /// Create new http server with application factory
-    pub fn new_with(factory: F) -> Self {
-        HttpServer {
-            factory,
-            config: Arc::new(Mutex::new(Config {
-                host: None,
-                keep_alive: KeepAlive::Timeout(5),
-                client_timeout: 5000,
-                client_shutdown: 5000,
-            })),
-            backlog: 1024,
-            sockets: Vec::new(),
-            builder: ServerBuilder::new(),
-            on_connect_fn: None,
-            _t: PhantomData,
-        }
-    }
-
     /// Sets function that will be called once before each connection is handled.
     /// It will receive a `&std::any::Any`, which contains underlying connection type and an
     /// [Extensions] container so that request-local data can be passed to middleware and handlers.
@@ -291,9 +291,9 @@ where
     /// The socket address to bind with a custom type of stream.
     ///
     /// To bind multiple addresses this method can be called multiple times.
-    pub fn bind_with<St, A: net::ToSocketAddrs>(mut self, addr: A) -> io::Result<Self>
+    pub fn bind_with<St, A>(mut self, addr: A) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
         A: net::ToSocketAddrs,
     {
         let sockets = self.bind2(addr)?;
@@ -311,7 +311,7 @@ where
     /// it needs to be configured before passing it to listen() method.
     pub fn listen<St>(mut self, lst: net::TcpListener) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
     {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
@@ -433,7 +433,7 @@ where
     /// Start listening for incoming unix domain connections with a custom stream type.
     pub fn bind_uds_with<St, A>(mut self, addr: A) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
         A: AsRef<std::path::Path>,
     {
         let cfg = self.config.clone();
@@ -479,7 +479,7 @@ where
         lst: std::os::unix::net::UnixListener,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
     {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
@@ -559,7 +559,7 @@ where
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
         A: net::ToSocketAddrs,
     {
         let sockets = self.bind2(addr)?;
@@ -580,7 +580,7 @@ where
         builder: SslAcceptorBuilder,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
     {
         self.listen_ssl_inner::<St>(lst, openssl_acceptor(builder)?)
     }
@@ -591,7 +591,7 @@ where
         acceptor: SslAcceptor,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
     {
         let factory = self.factory.clone();
         let cfg = self.config.clone();
@@ -667,7 +667,7 @@ where
         config: RustlsServerConfig,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
         A: net::ToSocketAddrs,
     {
         let sockets = self.bind2(addr)?;
@@ -686,7 +686,7 @@ where
         config: RustlsServerConfig,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
     {
         self.listen_rustls_inner::<St>(lst, config)
     }
@@ -697,7 +697,7 @@ where
         config: RustlsServerConfig,
     ) -> io::Result<Self>
     where
-        St: ServiceStream + FromMio,
+        St: ServiceStream + FromMio + Send,
     {
         let factory = self.factory.clone();
         let cfg = self.config.clone();

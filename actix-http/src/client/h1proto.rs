@@ -9,7 +9,6 @@ use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
 use futures_util::future::poll_fn;
 use futures_util::{pin_mut, SinkExt, StreamExt};
-use actix_rt::RuntimeService;
 
 use crate::error::PayloadError;
 use crate::h1;
@@ -31,7 +30,7 @@ pub(crate) async fn send_request<T, B>(
     pool: Option<Acquired<T>>,
 ) -> Result<(ResponseHead, Payload), SendRequestError>
 where
-    T: AsyncRead + AsyncWrite + RuntimeService + Unpin + 'static,
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     B: MessageBody,
 {
     // set request host header
@@ -102,7 +101,7 @@ where
 pub(crate) async fn open_tunnel<T>(
     io: T,
     head: RequestHeadType,
-) -> Result<(ResponseHead, Framed<T, h1::ClientCodec<T>>), SendRequestError>
+) -> Result<(ResponseHead, Framed<T, h1::ClientCodec>), SendRequestError>
 where
     T: AsyncRead + AsyncWrite + Unpin + 'static,
 {
@@ -122,7 +121,7 @@ where
 /// send request body to the peer
 pub(crate) async fn send_body<T, B>(
     body: B,
-    mut framed: Pin<&mut Framed<T, h1::ClientCodec<T>>>,
+    mut framed: Pin<&mut Framed<T, h1::ClientCodec>>,
 ) -> Result<(), SendRequestError>
 where
     T: ConnectionLifetime + Unpin,
@@ -248,11 +247,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static> AsyncWrite for H1Connection<T>
 #[pin_project::pin_project]
 pub(crate) struct PlStream<Io> {
     #[pin]
-    framed: Option<Framed<Io, h1::ClientPayloadCodec<Io>>>,
+    framed: Option<Framed<Io, h1::ClientPayloadCodec>>,
 }
 
 impl<Io: ConnectionLifetime> PlStream<Io> {
-    fn new(framed: Framed<Io, h1::ClientCodec<Io>>) -> Self {
+    fn new(framed: Framed<Io, h1::ClientCodec>) -> Self {
         let framed = framed.into_map_codec(|codec| codec.into_payload_codec());
 
         PlStream {

@@ -4,11 +4,11 @@ use std::task::{Context, Poll};
 use actix_codec::Framed;
 use actix_service::{Service, ServiceFactory};
 use futures_util::future::Ready;
+use actix_server::ServiceStream;
 
 use crate::error::Error;
 use crate::h1::Codec;
 use crate::request::Request;
-use actix_server::ServiceStream;
 
 pub struct UpgradeHandler<T>(PhantomData<T>);
 

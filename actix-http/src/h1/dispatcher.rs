@@ -5,7 +5,9 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 use std::{fmt, io, net};
 
-use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
+use actix_codec::{AsyncRead, Decoder, Encoder, Framed, FramedParts};
+use actix_rt::{RuntimeService, SleepService};
+use actix_server::ServiceStream;
 use actix_service::Service;
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
@@ -28,8 +30,6 @@ use crate::{
 use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{Message, MessageType};
-use actix_rt::{RuntimeService, SleepService};
-use actix_server::ServiceStream;
 
 const LW_BUFFER_SIZE: usize = 4096;
 const HW_BUFFER_SIZE: usize = 32_768;
@@ -166,7 +166,7 @@ impl PartialEq for PollResponse {
 
 impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + ServiceStream,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
@@ -258,7 +258,7 @@ where
 
 impl<T, S, B, X, U> InnerDispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + ServiceStream,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,
@@ -718,7 +718,7 @@ where
 
 impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + ServiceStream,
+    T: ServiceStream,
     S: Service<Request = Request>,
     S::Error: Into<Error>,
     S::Response: Into<Response<B>>,

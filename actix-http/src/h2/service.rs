@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{net, rc::Rc};
 
+use actix_server::ServiceStream;
 use actix_service::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,
@@ -24,7 +25,6 @@ use crate::response::Response;
 use crate::{ConnectCallback, Extensions};
 
 use super::dispatcher::Dispatcher;
-use actix_server::ServiceStream;
 
 /// `ServiceFactory` implementation for HTTP2 transport
 pub struct H2Service<T, S, B>
